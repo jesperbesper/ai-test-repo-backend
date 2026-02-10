@@ -68,3 +68,127 @@ class Profile(TimestampedModel):
     def has_favorited(self, article):
         """Returns True if we have favorited `article`; else False."""
         return self.favorites.filter(pk=article.pk).exists()
+
+
+class ProfileStatistics(models.Model):
+    """Cache profile statistics for performance."""
+    profile = models.OneToOneField(
+        Profile, on_delete=models.CASCADE, related_name='statistics'
+    )
+    
+    total_articles = models.IntegerField(default=0)
+    total_comments = models.IntegerField(default=0)
+    total_followers = models.IntegerField(default=0)
+    total_following = models.IntegerField(default=0)
+    total_article_views = models.IntegerField(default=0)
+    total_likes_received = models.IntegerField(default=0)
+    
+    last_updated = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.profile.user.username} - Statistics"
+
+
+class FollowRequest(models.Model):
+    """Manage follow requests for private profiles."""
+    from_profile = models.ForeignKey(
+        Profile, on_delete=models.CASCADE, related_name='sent_follow_requests'
+    )
+    
+    to_profile = models.ForeignKey(
+        Profile, on_delete=models.CASCADE, related_name='received_follow_requests'
+    )
+    
+    message = models.TextField(blank=True, max_length=500)
+    
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('rejected', 'Rejected'),
+    )
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ['from_profile', 'to_profile']
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.from_profile.user.username} -> {self.to_profile.user.username}"
+
+
+class Badge(models.Model):
+    """Achievement badges for users."""
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField()
+    icon = models.CharField(max_length=50)
+    
+    # Requirements
+    required_articles = models.IntegerField(default=0)
+    required_followers = models.IntegerField(default=0)
+    required_comments = models.IntegerField(default=0)
+    
+    # Badge properties
+    rarity = models.CharField(
+        max_length=10,
+        choices=[
+            ('common', 'Common'),
+            ('rare', 'Rare'),
+            ('epic', 'Epic'),
+            ('legendary', 'Legendary')
+        ],
+        default='common'
+    )
+    
+    is_active = models.BooleanField(default=True)
+    order = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['order', 'name']
+
+    def __str__(self):
+        return self.name
+
+
+class ProfileBadge(models.Model):
+    """Track which badges profiles have earned."""
+    profile = models.ForeignKey(
+        Profile, on_delete=models.CASCADE, related_name='earned_badges'
+    )
+    
+    badge = models.ForeignKey(
+        Badge, on_delete=models.CASCADE, related_name='awarded_to'
+    )
+    
+    earned_at = models.DateTimeField(auto_now_add=True)
+    is_displayed = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = ['profile', 'badge']
+        ordering = ['-earned_at']
+
+    def __str__(self):
+        return f"{self.profile.user.username} - {self.badge.name}"
+
+
+class UserBlocking(models.Model):
+    """Allow users to block other users."""
+    blocker = models.ForeignKey(
+        Profile, on_delete=models.CASCADE, related_name='blocking'
+    )
+    
+    blocked = models.ForeignKey(
+        Profile, on_delete=models.CASCADE, related_name='blocked_by'
+    )
+    
+    reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['blocker', 'blocked']
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.blocker.user.username} blocked {self.blocked.user.username}"

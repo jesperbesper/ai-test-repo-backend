@@ -137,3 +137,128 @@ class User(AbstractBaseUser, PermissionsMixin, TimestampedModel):
         }, settings.SECRET_KEY, algorithm='HS256')
 
         return token.decode('utf-8')
+
+
+class UserNotification(models.Model):
+    """Notifications for user activities."""
+    NOTIFICATION_TYPES = (
+        ('follow', 'New Follower'),
+        ('comment', 'New Comment'),
+        ('like', 'Article Liked'),
+        ('mention', 'Mentioned'),
+        ('rating', 'Article Rated'),
+        ('reply', 'Comment Reply'),
+    )
+
+    recipient = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='notifications'
+    )
+    
+    notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES)
+    message = models.TextField()
+    
+    actor = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='sent_notifications',
+        null=True, blank=True
+    )
+    
+    link = models.CharField(max_length=255, blank=True)
+    
+    is_read = models.BooleanField(default=False)
+    read_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.notification_type} for {self.recipient.username}"
+
+
+class UserSession(models.Model):
+    """Track user login sessions for security."""
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='sessions'
+    )
+    
+    session_token = models.CharField(max_length=255, unique=True)
+    ip_address = models.GenericIPAddressField()
+    user_agent = models.TextField()
+    
+    is_active = models.BooleanField(default=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_activity = models.DateTimeField(auto_now=True)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ['-last_activity']
+
+    def __str__(self):
+        return f"{self.user.username} - {self.ip_address}"
+
+
+class UserActivityLog(models.Model):
+    """Log user activities for analytics."""
+    ACTIVITY_TYPES = (
+        ('login', 'User Login'),
+        ('logout', 'User Logout'),
+        ('article_view', 'Article View'),
+        ('article_create', 'Article Create'),
+        ('article_edit', 'Article Edit'),
+        ('article_delete', 'Article Delete'),
+        ('profile_update', 'Profile Update'),
+        ('password_change', 'Password Change'),
+    )
+
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='activity_logs'
+    )
+    
+    activity_type = models.CharField(max_length=30, choices=ACTIVITY_TYPES)
+    description = models.TextField(blank=True)
+    
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    metadata = models.TextField(blank=True)  # JSON data
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['activity_type', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.activity_type}"
+
+
+class UserPreference(models.Model):
+    """Store user preferences and settings."""
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name='preferences'
+    )
+    
+    # Email preferences
+    email_on_new_follower = models.BooleanField(default=True)
+    email_on_comment = models.BooleanField(default=True)
+    email_on_mention = models.BooleanField(default=True)
+    email_newsletter = models.BooleanField(default=False)
+    
+    # Display preferences
+    theme = models.CharField(
+        max_length=10, 
+        choices=[('light', 'Light'), ('dark', 'Dark'), ('auto', 'Auto')],
+        default='auto'
+    )
+    language = models.CharField(max_length=10, default='en')
+    articles_per_page = models.IntegerField(default=10)
+    
+    # Privacy settings
+    show_email = models.BooleanField(default=False)
+    show_reading_list = models.BooleanField(default=True)
+    allow_indexing = models.BooleanField(default=True)
+
+    def __str__(self):
+        return f"{self.user.username}'s preferences"
