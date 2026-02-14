@@ -1,244 +1,239 @@
+```bash
 #!/bin/bash
 
 ################################################################################
-# Development Environment Setup with Mock Data
+# Full Development Environment Setup Script
 ################################################################################
-# This script starts both the Django backend and React frontend, then populates
-# the database with sample data for collaborative editing scenarios.
+# This script:
 #
-# Usage:
-#   ./dev-with-mock-data.sh
+# - Sets up Python virtual environment
+# - Installs backend dependencies
+# - Loads environment variables (.env if present)
+# - Runs migrations
+# - Starts Django backend
+# - Installs frontend dependencies
+# - Starts React frontend
+# - Loads mock data if available
 #
-# The script will:
-#   1. Start Django development server (http://localhost:8000)
-#   2. Start React development server (http://localhost:4100)
-#   3. Run database migrations
-#   4. Load mock data in the correct order:
-#      - Users and profiles
-#      - Articles with revision history
-#      - Comments with threaded discussions
-#      - Notifications for collaboration scenarios
-#      - Follow relationships for presence indication
-#
-# Press Ctrl+C to stop all services.
+# Designed to run locally OR inside Docker.
 ################################################################################
 
-set -e  # Exit on any error
+set -e
 
-# Colors for output
+################################################################################
+# Colors
+################################################################################
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Determine the directory where this script is located
+################################################################################
+# Directory detection
+################################################################################
+
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-# Backend repo is two levels up from .tara/dev-with-mock-data.sh
 BACKEND_DIR="$( dirname "$SCRIPT_DIR" )"
-# Workspace root is one level up from backend repo
 WORKSPACE_ROOT="$( dirname "$BACKEND_DIR" )"
+
+FRONTEND_DIR="$WORKSPACE_ROOT/react-redux-realworld-example-app"
 
 echo -e "${BLUE}=================================${NC}"
 echo -e "${BLUE}Dev Environment Setup${NC}"
 echo -e "${BLUE}=================================${NC}"
 echo ""
-echo -e "${YELLOW}Backend directory:${NC} $BACKEND_DIR"
-echo -e "${YELLOW}Frontend directory:${NC} $WORKSPACE_ROOT/jesperbesper-ai-test-repo-frontend"
+echo -e "${YELLOW}Backend:${NC} $BACKEND_DIR"
+echo -e "${YELLOW}Frontend:${NC} $FRONTEND_DIR"
 echo ""
 
-# Function to handle cleanup on exit
+################################################################################
+# Cleanup
+################################################################################
+
 cleanup() {
+
     echo ""
     echo -e "${YELLOW}Shutting down services...${NC}"
 
-    # Kill all background processes started by this script
     if [ ! -z "$BACKEND_PID" ]; then
-        echo -e "${YELLOW}Stopping Django server (PID: $BACKEND_PID)...${NC}"
-        kill $BACKEND_PID 2>/dev/null || true
+        kill -TERM $BACKEND_PID 2>/dev/null || true
     fi
 
     if [ ! -z "$FRONTEND_PID" ]; then
-        echo -e "${YELLOW}Stopping React server (PID: $FRONTEND_PID)...${NC}"
-        kill $FRONTEND_PID 2>/dev/null || true
+        kill -TERM $FRONTEND_PID 2>/dev/null || true
     fi
 
-    echo -e "${GREEN}Services stopped.${NC}"
-    exit 0
+    echo -e "${GREEN}Shutdown complete${NC}"
 }
 
-# Set trap to cleanup on exit
 trap cleanup EXIT INT TERM
 
 ################################################################################
-# Step 1: Start Django Backend
+# Backend setup
 ################################################################################
-echo -e "${BLUE}[1/4]${NC} Starting Django development server..."
+
+echo -e "${BLUE}[1/6] Backend setup${NC}"
+
 cd "$BACKEND_DIR"
 
-# Check if manage.py exists
 if [ ! -f "manage.py" ]; then
-    echo -e "${RED}Error: manage.py not found in $BACKEND_DIR${NC}"
+    echo -e "${RED}manage.py not found${NC}"
     exit 1
 fi
 
-# Start Django server in background
+################################################################################
+# Load environment variables
+################################################################################
+
+if [ -f ".env" ]; then
+    echo -e "${YELLOW}Loading .env file${NC}"
+    export $(grep -v '^#' .env | xargs)
+fi
+
+################################################################################
+# Virtual environment
+################################################################################
+
+if [ ! -d "venv" ]; then
+    echo -e "${YELLOW}Creating virtual environment${NC}"
+    python3 -m venv venv
+fi
+
+echo -e "${YELLOW}Activating virtual environment${NC}"
+source venv/bin/activate || source venv/Scripts/activate
+
+################################################################################
+# Install dependencies
+################################################################################
+
+echo -e "${YELLOW}Installing backend dependencies${NC}"
+
+if [ -f "requirements.txt" ]; then
+    pip install --upgrade pip
+    pip install -r requirements.txt
+fi
+
+################################################################################
+# Run migrations BEFORE starting server
+################################################################################
+
+echo -e "${BLUE}[2/6] Running migrations${NC}"
+
+python manage.py migrate
+
+echo -e "${GREEN}Migrations complete${NC}"
+
+################################################################################
+# Optional superuser
+################################################################################
+
+if python manage.py shell -c "import django.contrib.auth; exit()" 2>/dev/null; then
+
+    echo -e "${YELLOW}Ensuring default superuser exists${NC}"
+
+    python manage.py shell <<EOF
+from django.contrib.auth import get_user_model
+User = get_user_model()
+if not User.objects.filter(username="admin").exists():
+    User.objects.create_superuser("admin", "admin@example.com", "admin")
+EOF
+
+fi
+
+################################################################################
+# Start backend
+################################################################################
+
+echo -e "${BLUE}[3/6] Starting Django${NC}"
+
 python manage.py runserver 0.0.0.0:8000 > /tmp/django.log 2>&1 &
 BACKEND_PID=$!
 
-# Wait for Django to start
-echo -e "${YELLOW}Waiting for Django server to start...${NC}"
+echo -e "${YELLOW}Waiting for Django...${NC}"
+
 for i in {1..30}; do
-    if curl -s http://localhost:8000 > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ Django server started (PID: $BACKEND_PID)${NC}"
+
+    if curl -s http://localhost:8000 >/dev/null; then
+        echo -e "${GREEN}Django running${NC}"
         break
     fi
-    if [ $i -eq 30 ]; then
-        echo -e "${RED}Error: Django server failed to start${NC}"
-        cat /tmp/django.log
-        exit 1
-    fi
+
     sleep 1
+
 done
 
 ################################################################################
-# Step 2: Start React Frontend
+# Frontend setup
 ################################################################################
-echo ""
-echo -e "${BLUE}[2/4]${NC} Starting React development server..."
-cd "$WORKSPACE_ROOT/jesperbesper-ai-test-repo-frontend"
 
-# Check if package.json exists
-if [ ! -f "package.json" ]; then
-    echo -e "${RED}Error: package.json not found in $WORKSPACE_ROOT/jesperbesper-ai-test-repo-frontend${NC}"
-    exit 1
+echo -e "${BLUE}[4/6] Frontend setup${NC}"
+
+if [ -d "$FRONTEND_DIR" ]; then
+
+    cd "$FRONTEND_DIR"
+
+    if [ -f "package-lock.json" ]; then
+        npm ci
+    else
+        npm install
+    fi
+
+    echo -e "${BLUE}[5/6] Starting React${NC}"
+
+    npm start > /tmp/react.log 2>&1 &
+    FRONTEND_PID=$!
+
+else
+
+    echo -e "${YELLOW}Frontend directory not found, skipping${NC}"
+
 fi
 
-# Install dependencies if needed
-if [ ! -d "node_modules" ]; then
-    echo -e "${YELLOW}Installing frontend dependencies...${NC}"
-    npm install
-fi
+################################################################################
+# Load mock data if commands exist
+################################################################################
 
-# Start React server in background
-npm start > /tmp/react.log 2>&1 &
-FRONTEND_PID=$!
+echo -e "${BLUE}[6/6] Loading mock data${NC}"
 
-# Wait for React to start
-echo -e "${YELLOW}Waiting for React server to start...${NC}"
-for i in {1..60}; do
-    if curl -s http://localhost:4100 > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ React server started (PID: $FRONTEND_PID)${NC}"
-        break
+cd "$BACKEND_DIR"
+
+for cmd in \
+    load_users \
+    load_articles \
+    load_comments \
+    load_notifications \
+    load_collaboration_relationships
+do
+
+    if python manage.py help | grep -q "$cmd"; then
+
+        echo -e "${YELLOW}Running $cmd${NC}"
+        python manage.py $cmd
+
     fi
-    if [ $i -eq 60 ]; then
-        echo -e "${RED}Error: React server failed to start within timeout${NC}"
-        tail -20 /tmp/react.log
-        echo ""
-        echo -e "${YELLOW}Continuing with mock data population (React may still be building)...${NC}"
-        break
-    fi
-    sleep 1
+
 done
 
 ################################################################################
-# Step 3: Run Database Migrations
+# Success output
 ################################################################################
-echo ""
-echo -e "${BLUE}[3/4]${NC} Running database migrations..."
-cd "$BACKEND_DIR"
 
-python manage.py migrate
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Database migrations failed${NC}"
-    exit 1
-fi
-echo -e "${GREEN}✓ Database migrations completed${NC}"
-
-################################################################################
-# Step 4: Load Mock Data
-################################################################################
-echo ""
-echo -e "${BLUE}[4/4]${NC} Loading mock data for collaborative editing..."
-echo ""
-
-# Run all population commands in the correct order:
-# 1. Users and profiles (foundational)
-# 2. Articles with revision history
-# 3. Comments with threaded discussions
-# 4. Notifications for collaboration
-# 5. Follow relationships for presence
-
-cd "$BACKEND_DIR"
-
-echo -e "${YELLOW}Loading users and profiles...${NC}"
-python manage.py load_users
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to load users${NC}"
-    exit 1
-fi
-echo -e "${GREEN}✓ Users and profiles loaded${NC}"
-
-echo ""
-echo -e "${YELLOW}Loading articles with revision history...${NC}"
-python manage.py load_articles
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to load articles${NC}"
-    exit 1
-fi
-echo -e "${GREEN}✓ Articles loaded${NC}"
-
-echo ""
-echo -e "${YELLOW}Loading comments with threaded discussions...${NC}"
-python manage.py load_comments
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to load comments${NC}"
-    exit 1
-fi
-echo -e "${GREEN}✓ Comments loaded${NC}"
-
-echo ""
-echo -e "${YELLOW}Loading notifications for collaboration scenarios...${NC}"
-python manage.py load_notifications
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to load notifications${NC}"
-    exit 1
-fi
-echo -e "${GREEN}✓ Notifications loaded${NC}"
-
-echo ""
-echo -e "${YELLOW}Loading collaboration relationships...${NC}"
-python manage.py load_collaboration_relationships
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Failed to load collaboration relationships${NC}"
-    exit 1
-fi
-echo -e "${GREEN}✓ Collaboration relationships loaded${NC}"
-
-################################################################################
-# Startup Complete
-################################################################################
 echo ""
 echo -e "${GREEN}=================================${NC}"
-echo -e "${GREEN}Development environment is ready!${NC}"
+echo -e "${GREEN}Environment ready${NC}"
 echo -e "${GREEN}=================================${NC}"
 echo ""
-echo -e "${BLUE}Available Services:${NC}"
-echo -e "  ${YELLOW}Backend (Django):${NC}   http://localhost:8000"
-echo -e "  ${YELLOW}Frontend (React):${NC}   http://localhost:4100"
+echo "Backend:  http://localhost:8000"
+echo "Frontend: http://localhost:4100"
 echo ""
-echo -e "${BLUE}Mock Data Loaded:${NC}"
-echo -e "  • 5 users (alice, bob, charlie, diana, eve) with profiles"
-echo -e "  • 3 articles with revision history (v1, v2, v3)"
-echo -e "  • Threaded comment discussions with @mentions"
-echo -e "  • Notifications for mentions, comments, follows, and collaboration"
-echo -e "  • Follow relationships establishing collaboration network"
+echo "Logs:"
+echo "  /tmp/django.log"
+echo "  /tmp/react.log"
 echo ""
-echo -e "${BLUE}Backend Logs:${NC}   /tmp/django.log"
-echo -e "${BLUE}Frontend Logs:${NC}   /tmp/react.log"
-echo ""
-echo -e "${YELLOW}Press Ctrl+C to stop all services.${NC}"
+echo "Press Ctrl+C to stop"
 echo ""
 
-# Keep the script running
 wait
+```
